@@ -1,5 +1,7 @@
 import csv
 import json
+import statistics
+import pendulum
 from collections import Counter
 
 import urllib3
@@ -41,15 +43,58 @@ def fetch_s3_data(endpoint):
         print(f"Failed to download CSV file. Status code: {response.status}")
 
 
-def process_line(line):
+def process_line(data):
+    sale_date = ""
+    if not data['Last_Sold'] is None and not data['Last_Sold'] == "NULL":
+        dt = pendulum.parse(data['Last_Sold'])
+        if not dt.year == 2020:
+            return
+        sale_date = dt
+        print(f"DATE: {sale_date}")
+    else:
+        return
 
-    if len(line) > 10:
-        return {
-            'upc': line.get('ItemNum'),
-            'price': line.get('Price'),
-            'quantity': line.get('Quantity'),
-            'dept_id': line.get('Dept_ID')
-        }
+    upc = data['ItemNum']
+    internal_id = ""
+
+    if len(upc) < 5:
+        internal_id = f"biz_id_{upc}"
+        upc = ""
+    else:
+        for char in upc:
+            if not char.isdigit():
+                internal_id = f"biz_id_{upc}"
+                upc = ""
+    print(f"UPC: {upc}")
+    print(f"INTERNAL_ID: {internal_id}")
+
+    price = 0.0
+    if not data['Price'] is None:
+        price = float(data['Price'])
+    print(f"PRICE: {price}")
+    cost = 0.0
+    if not data['Cost'] is None:
+        cost = float(data['Cost'])
+    print(f"COST: {cost}")
+
+    margin_percentage = 0.0
+    if price > 0.0 and cost > 0.0:
+        margin_percentage = abs(price - cost) / statistics.mean([cost, price]) * 100
+    if margin_percentage > 30:
+        price = round((price / 100) * 7, 2)
+        print(f"MARGIN ABOVE 30: {price}")
+    else:
+        price = round((price / 100) * 9, 2)
+        print(f"MARGIN 30 or LESS: {price}")
+
+    if not data['ItemName'] is None and data['ItemName_Extra']:
+        name = data['ItemName'] + data['ItemName_Extra']
+        print(f"NAME: {name}")
+
+    quantity = data['Quantity']
+    print(f"QUANTITY: {quantity}")
+    department = data['Dept_ID']
+    print(f"DEPARTMENT: {department}")
 
 
 def sanitize_headers(headers):
@@ -59,10 +104,10 @@ def sanitize_headers(headers):
     new_headers = []
 
     for h in headers:
-        print(f"HEADER: {h}")
-        print(counter[h])
+        # print(f"HEADER: {h}")
+        # print(counter[h])
         if counter[h] > 1:
-            print(f"Adding {h} to SEEN")
+            # print(f"Adding {h} to SEEN")
             if h not in seen:
                 new_headers.append(h)
                 seen[h] = 0
@@ -84,9 +129,10 @@ with open(local_file_path, 'r') as in_file:
     reader = csv.DictReader(in_file, delimiter='|')
     sanitized_headers = sanitize_headers(reader.fieldnames)
     reader = csv.DictReader(in_file, delimiter='|', fieldnames=sanitized_headers)
+    next(reader)  # remove the row with dashes
 
     for row in reader:
-        print(row.get('ItemNum'))
+        process_line(row)
 
 
 print("Finished!")
