@@ -7,7 +7,6 @@ from collections import Counter
 import urllib3
 from bs4 import BeautifulSoup
 
-
 # 1. Using requests or any other HTTP library, grab the file HTML from: https://bitbucket.org/cityhive/jobs/src/master/integration-eng/integration-entryfile.html
 # 2. Then, parse the URL for the csv file located in the S3 bucket (as part of the script, not by hand)
 # 3. Make a GET request to Amazon's S3 with the details from #2 and save the to `local_file_path`
@@ -43,10 +42,10 @@ def fetch_s3_data(endpoint):
         print(f"Failed to download CSV file. Status code: {response.status}")
 
 
-def process_line(data):
-    sale_date = ""
-    if not data['Last_Sold'] is None and not data['Last_Sold'] == "NULL":
-        dt = pendulum.parse(data['Last_Sold'])
+def process_line(row_idx, data, item_tag_lookup, sku_counter):
+    last_sold = data['Last_Sold']
+    if last_sold is not None and not last_sold == "NULL" and not last_sold == "":
+        dt = pendulum.parse(last_sold)
         if not dt.year == 2020:
             return
         sale_date = dt
@@ -55,16 +54,28 @@ def process_line(data):
         return
 
     upc = data['ItemNum']
+    if upc == "":
+        upc = "INVALID"
     internal_id = ""
-
-    if len(upc) < 5:
-        internal_id = f"biz_id_{upc}"
-        upc = ""
+    if sku_counter.get(upc) is None:
+        sku_counter[upc] = 1
     else:
-        for char in upc:
+        sku_counter[upc] += 1
+
+    def is_valid_upc(val):
+        for char in val:
             if not char.isdigit():
-                internal_id = f"biz_id_{upc}"
-                upc = ""
+                return False
+        return True
+
+    if len(upc) < 5 or not is_valid_upc(upc):
+        print("UPC length too short!")
+        internal_id = f"biz_id_{upc}"
+        upc = None
+    elif not is_valid_upc(upc):
+        print("Checking if string has no digits")
+        internal_id = f"biz_id_{data['ItemNum']}"
+        upc = None
     print(f"UPC: {upc}")
     print(f"INTERNAL_ID: {internal_id}")
 
@@ -81,20 +92,32 @@ def process_line(data):
     if price > 0.0 and cost > 0.0:
         margin_percentage = abs(price - cost) / statistics.mean([cost, price]) * 100
     if margin_percentage > 30:
-        price = round((price / 100) * 7, 2)
+        price += round((price / 100) * 7, 2)
         print(f"MARGIN ABOVE 30: {price}")
+        item_tag_lookup["high_margin"].append(row_idx)
+    elif margin_percentage < 30:
+        price += round((price / 100) * 9, 2)
+        item_tag_lookup["low_margin"].append(row_idx)
+        print(f"MARGIN LESS than 30: {price}")
     else:
-        price = round((price / 100) * 9, 2)
-        print(f"MARGIN 30 or LESS: {price}")
+        price += round((price / 100) * 9, 2)
+        print(f"MARGIN EXACTLY 30%: {price}")
 
-    if not data['ItemName'] is None and data['ItemName_Extra']:
-        name = data['ItemName'] + data['ItemName_Extra']
-        print(f"NAME: {name}")
+    # if not data['ItemName'] is None and data['ItemName_Extra']:
+    name = data['ItemName'] + data['ItemName_Extra']
+    print(f"NAME: {name}")
 
     quantity = data['Quantity']
     print(f"QUANTITY: {quantity}")
     department = data['Dept_ID']
     print(f"DEPARTMENT: {department}")
+
+    properties = {"department": department, "vendor": data['Vendor_Number'], "description": data['Description_1']}
+    print(properties)
+
+    print(f"SKU_COUNTER: {sku_counter}")
+    if upc is not None and sku_counter[upc] > 1:
+        item_tag_lookup['duplicate_sku'].append(row_idx)
 
 
 def sanitize_headers(headers):
@@ -119,6 +142,7 @@ def sanitize_headers(headers):
 
     return new_headers
 
+
 # http = urllib3.PoolManager()
 # response = http.request("GET", initial_html_file)
 # endpoint = build_s3_endpoint(response.data)
@@ -131,8 +155,11 @@ with open(local_file_path, 'r') as in_file:
     reader = csv.DictReader(in_file, delimiter='|', fieldnames=sanitized_headers)
     next(reader)  # remove the row with dashes
 
-    for row in reader:
-        process_line(row)
+    item_tag_lookup = {"high_margin": [], "low_margin": [], "duplicate_sku": []}
+    sku_counter = {}
+    for idx, row in enumerate(reader):
+        process_line(idx, row, item_tag_lookup, sku_counter)
 
+    print(item_tag_lookup)
 
 print("Finished!")
