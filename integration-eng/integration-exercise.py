@@ -1,6 +1,9 @@
+import collections
 import csv
 import json
 import statistics
+from typing import Dict
+
 import pendulum
 from collections import Counter
 
@@ -42,21 +45,22 @@ def fetch_s3_data(endpoint):
         print(f"Failed to download CSV file. Status code: {response.status}")
 
 
-def process_line(row_idx, data, item_tag_lookup, sku_counter):
+def process_line(row_idx, data, duplicate_sku_ids, sku_counter, out):
+    data['Transform_ID'] = row_idx
+    data['Tags'] = set([])
+
     last_sold = data['Last_Sold']
     if last_sold is not None and not last_sold == "NULL" and not last_sold == "":
         dt = pendulum.parse(last_sold)
         if not dt.year == 2020:
             return
-        sale_date = dt
-        print(f"DATE: {sale_date}")
     else:
         return
 
     upc = data['ItemNum']
     if upc == "":
         upc = "INVALID"
-    internal_id = ""
+    internal_id = None
     if sku_counter.get(upc) is None:
         sku_counter[upc] = 1
     else:
@@ -69,55 +73,60 @@ def process_line(row_idx, data, item_tag_lookup, sku_counter):
         return True
 
     if len(upc) < 5 or not is_valid_upc(upc):
-        print("UPC length too short!")
         internal_id = f"biz_id_{upc}"
         upc = None
     elif not is_valid_upc(upc):
-        print("Checking if string has no digits")
         internal_id = f"biz_id_{data['ItemNum']}"
         upc = None
-    print(f"UPC: {upc}")
-    print(f"INTERNAL_ID: {internal_id}")
+    data['Internal_ID'] = internal_id
 
     price = 0.0
     if not data['Price'] is None:
         price = float(data['Price'])
-    print(f"PRICE: {price}")
     cost = 0.0
     if not data['Cost'] is None:
         cost = float(data['Cost'])
-    print(f"COST: {cost}")
 
     margin_percentage = 0.0
     if price > 0.0 and cost > 0.0:
         margin_percentage = abs(price - cost) / statistics.mean([cost, price]) * 100
     if margin_percentage > 30:
         price += round((price / 100) * 7, 2)
-        print(f"MARGIN ABOVE 30: {price}")
-        item_tag_lookup["high_margin"].append(row_idx)
+        data['Tags'].add('high_margin')
     elif margin_percentage < 30:
         price += round((price / 100) * 9, 2)
-        item_tag_lookup["low_margin"].append(row_idx)
-        print(f"MARGIN LESS than 30: {price}")
+        data['Tags'].add('low_margin')
     else:
         price += round((price / 100) * 9, 2)
-        print(f"MARGIN EXACTLY 30%: {price}")
 
-    # if not data['ItemName'] is None and data['ItemName_Extra']:
+    data['Margin_Percentage'] = margin_percentage
+    data['Price'] = price
+    data['Cost'] = cost
+
     name = data['ItemName'] + data['ItemName_Extra']
-    print(f"NAME: {name}")
+    data['Name'] = name
 
-    quantity = data['Quantity']
-    print(f"QUANTITY: {quantity}")
-    department = data['Dept_ID']
-    print(f"DEPARTMENT: {department}")
+    department = coalesce_null(data['Dept_ID'])
+    data['Department'] = department
 
-    properties = {"department": department, "vendor": data['Vendor_Number'], "description": data['Description_1']}
-    print(properties)
+    vendor = coalesce_null(data['Vendor_Number'])
+    description = coalesce_null(data['Description_1'])
 
-    print(f"SKU_COUNTER: {sku_counter}")
+    properties = {"department": department, "vendor": vendor, "description": description}
+    data['Properties'] = json.dumps(properties)
+
     if upc is not None and sku_counter[upc] > 1:
-        item_tag_lookup['duplicate_sku'].append(row_idx)
+        duplicate_sku_ids.add(row_idx)
+
+    out[data['Transform_ID']] = data
+
+
+def coalesce_null(val):
+    """Reduce any empty string or missing value to None"""
+    if val == "" or val == 'NULL' or val == 'NONE' or val == 'Null':
+        return None
+    else:
+        return val
 
 
 def sanitize_headers(headers):
@@ -127,10 +136,7 @@ def sanitize_headers(headers):
     new_headers = []
 
     for h in headers:
-        # print(f"HEADER: {h}")
-        # print(counter[h])
         if counter[h] > 1:
-            # print(f"Adding {h} to SEEN")
             if h not in seen:
                 new_headers.append(h)
                 seen[h] = 0
@@ -155,11 +161,20 @@ with open(local_file_path, 'r') as in_file:
     reader = csv.DictReader(in_file, delimiter='|', fieldnames=sanitized_headers)
     next(reader)  # remove the row with dashes
 
-    item_tag_lookup = {"high_margin": [], "low_margin": [], "duplicate_sku": []}
+    duplicate_sku_idx = set([])
     sku_counter = {}
+    transformed = collections.defaultdict(dict)
     for idx, row in enumerate(reader):
-        process_line(idx, row, item_tag_lookup, sku_counter)
+        process_line(idx, row, duplicate_sku_idx, sku_counter, transformed)
 
-    print(item_tag_lookup)
+    for idx, row in transformed.items():
+        if idx in duplicate_sku_idx:
+            row['Tags'].add('duplicated_sku')
+
+        # clean up empty, null, or none strings
+        for key, val in row.items():
+            row[key] = coalesce_null(val)
+    print(transformed)
+
 
 print("Finished!")
