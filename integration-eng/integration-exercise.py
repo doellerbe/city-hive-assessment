@@ -1,8 +1,8 @@
 import collections
 import csv
+import io
 import json
 import statistics
-from typing import Dict
 
 import pendulum
 from collections import Counter
@@ -38,14 +38,13 @@ def build_s3_endpoint(html):
 def fetch_s3_data(endpoint):
     response = http.request("GET", endpoint)
     if response.status == 200:
-        with open(local_file_path, 'wb') as file:
-            file.write(response.data)
-        print(f"CSV file downloaded successfully to {local_file_path}")
+        return io.StringIO(response.data.decode('utf-8'))
     else:
         print(f"Failed to download CSV file. Status code: {response.status}")
+        return None
 
 
-def process_line(row_idx, data, duplicate_sku_ids, sku_counter, out):
+def transform_line(row_idx, data, duplicate_sku_ids, sku_counter, out):
     data['Transform_ID'] = row_idx
     data['Tags'] = set([])
 
@@ -148,32 +147,30 @@ def sanitize_headers(headers):
     return new_headers
 
 
-# http = urllib3.PoolManager()
-# response = http.request("GET", initial_html_file)
-# endpoint = build_s3_endpoint(response.data)
-# fetch_s3_data(endpoint)
-
-
-with open(local_file_path, 'r') as in_file:
-    reader = csv.DictReader(in_file, delimiter='|')
+def transform_data(extracted_data):
+    reader = csv.DictReader(extracted_data, delimiter='|')
     sanitized_headers = sanitize_headers(reader.fieldnames)
-    reader = csv.DictReader(in_file, delimiter='|', fieldnames=sanitized_headers)
+    reader = csv.DictReader(extracted_data, delimiter='|', fieldnames=sanitized_headers)
     next(reader)  # remove the row with dashes
-
     duplicate_sku_idx = set([])
     sku_counter = {}
     transformed = collections.defaultdict(dict)
     for idx, row in enumerate(reader):
-        process_line(idx, row, duplicate_sku_idx, sku_counter, transformed)
-
+        transform_line(idx, row, duplicate_sku_idx, sku_counter, transformed)
     for idx, row in transformed.items():
         if idx in duplicate_sku_idx:
             row['Tags'].add('duplicated_sku')
 
-        # clean up empty, null, or none strings
         for key, val in row.items():
             row[key] = coalesce_null(val)
-    print(transformed)
+    return transformed
 
+
+http = urllib3.PoolManager()
+response = http.request("GET", initial_html_file)
+endpoint = build_s3_endpoint(response.data)
+extracted = fetch_s3_data(endpoint)
+transformed = transform_data(extracted)
+print(transformed)
 
 print("Finished!")
