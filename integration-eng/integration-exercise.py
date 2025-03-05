@@ -49,16 +49,16 @@ def process_line(row_idx, data, duplicate_sku_ids, sku_counter, out):
     data['Transform_ID'] = row_idx
     data['Tags'] = set([])
 
-    last_sold = data['Last_Sold']
-    if last_sold is not None and not last_sold == "NULL" and not last_sold == "":
+    last_sold = coalesce_null(data['Last_Sold'])
+    if last_sold is not None:
         dt = pendulum.parse(last_sold)
         if not dt.year == 2020:
             return
     else:
         return
 
-    upc = data['ItemNum']
-    if upc == "":
+    upc = coalesce_null(data['ItemNum'])
+    if upc is None:
         upc = "INVALID"
     internal_id = None
     if sku_counter.get(upc) is None:
@@ -79,6 +79,8 @@ def process_line(row_idx, data, duplicate_sku_ids, sku_counter, out):
         internal_id = f"biz_id_{data['ItemNum']}"
         upc = None
     data['Internal_ID'] = internal_id
+    if upc is not None and sku_counter[upc] > 1:
+        duplicate_sku_ids.add(row_idx)
 
     price = 0.0
     if not data['Price'] is None:
@@ -114,9 +116,6 @@ def process_line(row_idx, data, duplicate_sku_ids, sku_counter, out):
 
     properties = {"department": department, "vendor": vendor, "description": description}
     data['Properties'] = json.dumps(properties)
-
-    if upc is not None and sku_counter[upc] > 1:
-        duplicate_sku_ids.add(row_idx)
 
     out[data['Transform_ID']] = data
 
