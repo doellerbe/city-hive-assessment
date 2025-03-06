@@ -154,6 +154,11 @@ def transform_data(extracted_data):
     next(reader)  # remove the row with dashes
     duplicate_sku_idx = set([])
     sku_counter = {}
+
+    """
+        This should change to a single dict for the final output. 
+        We only needed the idx to perform the duplicate sku mapping
+    """
     transformed = collections.defaultdict(dict)
     for idx, row in enumerate(reader):
         transform_line(idx, row, duplicate_sku_idx, sku_counter, transformed)
