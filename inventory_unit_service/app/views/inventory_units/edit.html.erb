@@ -1,0 +1,12 @@
+<% content_for :title, "Editing inventory unit" %>
+
+<h1>Editing inventory unit</h1>
+
+<%= render "form", inventory_unit: @inventory_unit %>
+
+<br>
+
+<div>
+  <%= link_to "Show this inventory unit", @inventory_unit %> |
+  <%= link_to "Back to inventory units", inventory_units_path %>
+</div>
