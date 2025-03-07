@@ -21,14 +21,14 @@ class InventoryUnitsController < ApplicationController
 
   # POST /inventory_units or /inventory_units.json
   def create
-    @inventory_unit = InventoryUnit.new(inventory_unit_params)
+    @inventory_unit = InventoryUnit.new(params.permit!)
 
     respond_to do |format|
       if @inventory_unit.save
-        format.html { redirect_to @inventory_unit, notice: "Inventory unit was successfully created." }
+        # format.html { redirect_to @inventory_unit, notice: "Inventory unit was successfully created." }
         format.json { render :show, status: :created, location: @inventory_unit }
       else
-        format.html { render :new, status: :unprocessable_entity }
+        # format.html { render :new, status: :unprocessable_entity }
         format.json { render json: @inventory_unit.errors, status: :unprocessable_entity }
       end
     end
