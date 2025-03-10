@@ -44,11 +44,11 @@ def fetch_s3_data(endpoint):
         return None
 
 
-def transform_line(row_idx, data, duplicate_sku_ids, sku_counter, out):
-    data['Transform_ID'] = row_idx
-    data['Tags'] = set([])
+def transform_line(row_idx, input, duplicate_sku_ids, sku_counter, output):
+    input['Transform_ID'] = row_idx
+    input['Tags'] = set([])
 
-    last_sold = coalesce_null(data['Last_Sold'])
+    last_sold = coalesce_null(input['Last_Sold'])
     if last_sold is not None:
         dt = pendulum.parse(last_sold)
         if not dt.year == 2020:
@@ -56,7 +56,7 @@ def transform_line(row_idx, data, duplicate_sku_ids, sku_counter, out):
     else:
         return
 
-    upc = coalesce_null(data['ItemNum'])
+    upc = coalesce_null(input['ItemNum'])
     if upc is None:
         upc = "INVALID"
     internal_id = None
@@ -75,48 +75,48 @@ def transform_line(row_idx, data, duplicate_sku_ids, sku_counter, out):
         internal_id = f"biz_id_{upc}"
         upc = None
     elif not is_valid_upc(upc):
-        internal_id = f"biz_id_{data['ItemNum']}"
+        internal_id = f"biz_id_{input['ItemNum']}"
         upc = None
-    data['Internal_ID'] = internal_id
+    input['Internal_ID'] = internal_id
     if upc is not None and sku_counter[upc] > 1:
         duplicate_sku_ids.add(row_idx)
 
     price = 0.0
-    if not data['Price'] is None:
-        price = float(data['Price'])
+    if not input['Price'] is None:
+        price = float(input['Price'])
     cost = 0.0
-    if not data['Cost'] is None:
-        cost = float(data['Cost'])
+    if not input['Cost'] is None:
+        cost = float(input['Cost'])
 
     margin_percentage = 0.0
     if price > 0.0 and cost > 0.0:
         margin_percentage = abs(price - cost) / statistics.mean([cost, price]) * 100
     if margin_percentage > 30:
         price += round((price / 100) * 7, 2)
-        data['Tags'].add('high_margin')
+        input['Tags'].add('high_margin')
     elif margin_percentage < 30:
         price += round((price / 100) * 9, 2)
-        data['Tags'].add('low_margin')
+        input['Tags'].add('low_margin')
     else:
         price += round((price / 100) * 9, 2)
 
-    data['Margin_Percentage'] = margin_percentage
-    data['Price'] = price
-    data['Cost'] = cost
+    input['Margin_Percentage'] = margin_percentage
+    input['Price'] = price
+    input['Cost'] = cost
 
-    name = data['ItemName'] + data['ItemName_Extra']
-    data['Name'] = name
+    name = input['ItemName'] + input['ItemName_Extra']
+    input['Name'] = name
 
-    department = coalesce_null(data['Dept_ID'])
-    data['Department'] = department
+    department = coalesce_null(input['Dept_ID'])
+    input['Department'] = department
 
-    vendor = coalesce_null(data['Vendor_Number'])
-    description = coalesce_null(data['Description_1'])
+    vendor = coalesce_null(input['Vendor_Number'])
+    description = coalesce_null(input['Description_1'])
 
     properties = {"department": department, "vendor": vendor, "description": description}
-    data['Properties'] = json.dumps(properties)
+    input['Properties'] = json.dumps(properties)
 
-    out[data['Transform_ID']] = data
+    output[input['Transform_ID']] = input
 
 
 def coalesce_null(val):
@@ -159,16 +159,16 @@ def transform_data(extracted_data):
         This should change to a single dict for the final output. 
         We only needed the idx to perform the duplicate sku mapping
     """
-    transformed = collections.defaultdict(dict)
+    out = collections.defaultdict(dict)
     for idx, row in enumerate(reader):
-        transform_line(idx, row, duplicate_sku_idx, sku_counter, transformed)
-    for idx, row in transformed.items():
+        transform_line(idx, row, duplicate_sku_idx, sku_counter, out)
+    for idx, row in out.items():
         if idx in duplicate_sku_idx:
             row['Tags'].add('duplicated_sku')
 
         for key, val in row.items():
             row[key] = coalesce_null(val)
-    return transformed
+    return out
 
 
 http = urllib3.PoolManager()
@@ -176,6 +176,7 @@ response = http.request("GET", initial_html_file)
 endpoint = build_s3_endpoint(response.data)
 extracted = fetch_s3_data(endpoint)
 transformed = transform_data(extracted)
-print(transformed)
+post_response = http.request("POST", url="http://localhost:3001/inventory_units.json", fields={"hello": "world", "ItemNum": "python!"})
+
 
 print("Finished!")
