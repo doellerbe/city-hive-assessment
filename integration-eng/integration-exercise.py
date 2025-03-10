@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import statistics
+import sys
 
 import pendulum
 from collections import Counter
@@ -14,8 +15,9 @@ from bs4 import BeautifulSoup
 # 2. Then, parse the URL for the csv file located in the S3 bucket (as part of the script, not by hand)
 # 3. Make a GET request to Amazon's S3 with the details from #2 and save the to `local_file_path`
 
-initial_html_file = "https://bitbucket.org/cityhive/jobs/raw/47fb39b480e7e5b588a5f57e6e068cea9fcbfcb2/integration-eng/integration-entryfile.html"
-local_file_path = "resources/output.csv"
+INITIAL_HTML_FILE = "https://bitbucket.org/cityhive/jobs/raw/47fb39b480e7e5b588a5f57e6e068cea9fcbfcb2/integration-eng/integration-entryfile.html"
+LOCAL_OUTPUT_FILE_PATH = "resources/parsed_output.csv"
+API_ENDPOINT = "http://localhost:3001/inventory_units.json"
 
 
 def build_s3_endpoint(html):
@@ -128,7 +130,7 @@ def coalesce_null(val):
 
 
 def sanitize_headers(headers):
-    """ Append a counter to duplicate headers to make them unique """
+    """Append a counter to duplicate headers to make them unique"""
     counter = Counter(headers)
     seen = {}
     new_headers = []
@@ -157,31 +159,63 @@ def transform_data(extracted_data):
 
     """
         This should change to a single dict for the final output. 
-        We only needed the idx to perform the duplicate sku mapping
+        We only need the idx to perform the duplicate sku mapping
     """
     out = collections.defaultdict(dict)
     for idx, row in enumerate(reader):
         transform_line(idx, row, duplicate_sku_idx, sku_counter, out)
     for idx, row in out.items():
         if idx in duplicate_sku_idx:
-            row['Tags'].append('duplicated_sku')
+            row['Tags'].append('duplicate_sku')
 
         for key, val in row.items():
             row[key] = coalesce_null(val)
     return out
 
 
-http = urllib3.PoolManager()
-response = http.request("GET", initial_html_file)
-endpoint = build_s3_endpoint(response.data)
-extracted = fetch_s3_data(endpoint)
-transformed = transform_data(extracted)
-for row in transformed.values():
-    data = json.dumps(row)
-    print(f"Writing row: {row}")
-    http.request("POST",
-                 url="http://localhost:3001/inventory_units.json",
-                 headers={'Content-Type': 'application/json'},
-                 body=data)
+if len(sys.argv) == 2:
+    arg = sys.argv[1]
+    print("Arguments:", arg)
+
+    if arg == "generate_csv":
+        http = urllib3.PoolManager()
+        response = http.request("GET", INITIAL_HTML_FILE)
+        endpoint = build_s3_endpoint(response.data)
+        extracted = fetch_s3_data(endpoint)
+        transformed = transform_data(extracted)
+
+        data = [row for row in transformed.values()]
+        fieldnames = data[0].keys() if data else []
+        with open(LOCAL_OUTPUT_FILE_PATH, "w", newline="") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+            if fieldnames:
+                writer.writeheader()
+                writer.writerows(data)
+
+    elif arg == "upload":
+        http = urllib3.PoolManager()
+        response = http.request("GET", INITIAL_HTML_FILE)
+        endpoint = build_s3_endpoint(response.data)
+        extracted = fetch_s3_data(endpoint)
+        transformed = transform_data(extracted)
+
+        for row in transformed.values():
+            data = json.dumps(row)
+            http.request("POST",
+                         url=API_ENDPOINT,
+                         headers={'Content-Type': 'application/json'},
+                         body=data)
+
+    elif arg == "list_uploads":
+        http = urllib3.PoolManager()
+        response = http.request("GET", url=API_ENDPOINT)
+        print(response.data)
+    else:
+        print("Wrong args provided. Please choose one of these options ['generate_csv', 'upload', 'list_uploads']")
+else:
+    print(sys.argv)
+    print("Wrong number of args provided. Please choose one of these options ['generate_csv', 'upload', 'list_uploads']")
+
 
 print("Finished!")
