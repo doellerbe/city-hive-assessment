@@ -21,8 +21,7 @@ class InventoryUnitsController < ApplicationController
 
   # POST /inventory_units or /inventory_units.json
   def create
-    @inventory_unit = InventoryUnit.new(params.permit!)
-
+    @inventory_unit = InventoryUnit.new(remove_route_params)
     respond_to do |format|
       if @inventory_unit.save
         # format.html { redirect_to @inventory_unit, notice: "Inventory unit was successfully created." }
@@ -67,4 +66,9 @@ class InventoryUnitsController < ApplicationController
     def inventory_unit_params
       params.fetch(:inventory_unit, {})
     end
+
+  # A hack to prevent route params from being added to the payload
+  def remove_route_params
+    params.permit!.except(:controller, :action, :format, :inventory_unit)
+  end
 end
