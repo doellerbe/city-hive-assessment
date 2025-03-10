@@ -46,7 +46,7 @@ def fetch_s3_data(endpoint):
 
 def transform_line(row_idx, input, duplicate_sku_ids, sku_counter, output):
     input['Transform_ID'] = row_idx
-    input['Tags'] = set([])
+    input['Tags'] = []
 
     last_sold = coalesce_null(input['Last_Sold'])
     if last_sold is not None:
@@ -79,7 +79,7 @@ def transform_line(row_idx, input, duplicate_sku_ids, sku_counter, output):
         upc = None
     input['Internal_ID'] = internal_id
     if upc is not None and sku_counter[upc] > 1:
-        duplicate_sku_ids.add(row_idx)
+        duplicate_sku_ids.append(row_idx)
 
     price = 0.0
     if not input['Price'] is None:
@@ -93,10 +93,10 @@ def transform_line(row_idx, input, duplicate_sku_ids, sku_counter, output):
         margin_percentage = abs(price - cost) / statistics.mean([cost, price]) * 100
     if margin_percentage > 30:
         price += round((price / 100) * 7, 2)
-        input['Tags'].add('high_margin')
+        input['Tags'].append('high_margin')
     elif margin_percentage < 30:
         price += round((price / 100) * 9, 2)
-        input['Tags'].add('low_margin')
+        input['Tags'].append('low_margin')
     else:
         price += round((price / 100) * 9, 2)
 
@@ -152,7 +152,7 @@ def transform_data(extracted_data):
     sanitized_headers = sanitize_headers(reader.fieldnames)
     reader = csv.DictReader(extracted_data, delimiter='|', fieldnames=sanitized_headers)
     next(reader)  # remove the row with dashes
-    duplicate_sku_idx = set([])
+    duplicate_sku_idx = []
     sku_counter = {}
 
     """
@@ -164,7 +164,7 @@ def transform_data(extracted_data):
         transform_line(idx, row, duplicate_sku_idx, sku_counter, out)
     for idx, row in out.items():
         if idx in duplicate_sku_idx:
-            row['Tags'].add('duplicated_sku')
+            row['Tags'].append('duplicated_sku')
 
         for key, val in row.items():
             row[key] = coalesce_null(val)
@@ -176,7 +176,12 @@ response = http.request("GET", initial_html_file)
 endpoint = build_s3_endpoint(response.data)
 extracted = fetch_s3_data(endpoint)
 transformed = transform_data(extracted)
-post_response = http.request("POST", url="http://localhost:3001/inventory_units.json", fields={"hello": "world", "ItemNum": "python!"})
-
+for row in transformed.values():
+    data = json.dumps(row)
+    print(f"Writing row: {row}")
+    http.request("POST",
+                 url="http://localhost:3001/inventory_units.json",
+                 headers={'Content-Type': 'application/json'},
+                 body=data)
 
 print("Finished!")
